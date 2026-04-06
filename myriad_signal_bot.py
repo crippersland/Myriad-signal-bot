@@ -25,8 +25,8 @@ with st.sidebar:
         """, unsafe_allow_html=True)
 
 st.title("🚀 Myriad Markets 5-Min Candle Signal Bot")
-st.subheader("Confidence Shown for All • Alerts Only on ≥80%")
-st.caption("BTC • ETH • BNB • ZEC • PENGU | Built for TheCryptomajor")
+st.subheader("Confidence for All • Alerts Only ≥80%")
+st.caption("BTC • ETH • BNB • ZEC • PENGU | Multiple Data Sources")
 
 def send_telegram_alert(message: str):
     try:
@@ -35,34 +35,50 @@ def send_telegram_alert(message: str):
         requests.post(url, data=data, timeout=10)
         return True
     except:
-        st.error("Failed to send Telegram alert")
+        st.error("Telegram send failed")
         return False
 
-# ====================== DUAL-SOURCE DATA FETCH ======================
+# ====================== MULTI-SOURCE CANDLE FETCH ======================
 def get_klines(symbol):
-    # Try Futures first
-    url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval=5m&limit=30"
+    # 1. Binance Futures (most reliable for 5m)
     try:
-        r = requests.get(url, timeout=12)
+        url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval=5m&limit=20"
+        r = requests.get(url, timeout=10)
         if r.ok:
             data = r.json()
             if len(data) >= 2:
                 df = pd.DataFrame(data, columns=['time','open','high','low','close','volume','close_time','quote_volume','trades','taker_base','taker_quote','ignore'])
                 df['close'] = pd.to_numeric(df['close'])
-                return df, "Futures"
+                return df, "Binance Futures"
     except:
         pass
 
-    # Fallback to Spot
-    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=5m&limit=30"
+    # 2. Binance Spot fallback
     try:
-        r = requests.get(url, timeout=12)
+        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=5m&limit=20"
+        r = requests.get(url, timeout=10)
         if r.ok:
             data = r.json()
             if len(data) >= 2:
                 df = pd.DataFrame(data, columns=['time','open','high','low','close','volume','close_time','quote_volume','trades','taker_base','taker_quote','ignore'])
                 df['close'] = pd.to_numeric(df['close'])
-                return df, "Spot"
+                return df, "Binance Spot"
+    except:
+        pass
+
+    # 3. CoinGecko fallback (for PENGU and others)
+    try:
+        coin_id = {"BTCUSDT": "bitcoin", "ETHUSDT": "ethereum", "BNBUSDT": "binancecoin", 
+                   "ZECUSDT": "zcash", "PENGUUSDT": "pudgy-penguins"}.get(symbol, "bitcoin")
+        url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart?vs_currency=usd&days=1&interval=5m"
+        r = requests.get(url, timeout=10)
+        if r.ok:
+            data = r.json()
+            prices = data.get("prices", [])
+            if len(prices) >= 3:
+                df = pd.DataFrame(prices, columns=['time', 'close'])
+                df['close'] = pd.to_numeric(df['close'])
+                return df, "CoinGecko"
     except:
         pass
 
@@ -70,7 +86,7 @@ def get_klines(symbol):
 
 def generate_signal(df, asset_name):
     if df is None or len(df) < 2:
-        return f"**WAITING** ({asset_name})", 0, "No candle data"
+        return f"**WAITING** ({asset_name})", 0, "No data"
     
     current_price = float(df['close'].iloc[-1])
     lookback = min(5, len(df)-1)
@@ -94,14 +110,14 @@ def generate_signal(df, asset_name):
 
 coins = {"BTC": "BTCUSDT", "ETH": "ETHUSDT", "BNB": "BNBUSDT", "ZEC": "ZECUSDT", "PENGU": "PENGUUSDT"}
 
-# ====================== MAIN DASHBOARD ======================
+# ====================== DASHBOARD ======================
 if st.button("🔴 CHECK SIGNALS & SEND TELEGRAM (Only ≥80%)", type="primary", use_container_width=True):
     st.rerun()
 
 st.subheader("Current Signals")
 st.caption(f"Last checked: {datetime.now().strftime('%H:%M:%S UTC')}")
 
-with st.spinner("Fetching 5-min candles from Binance (Futures + Spot)..."):
+with st.spinner("Trying Binance Futures → Spot → CoinGecko..."):
     alert_lines = [f"🔔 **Myriad 5-Min Strong Signals** @ {datetime.now().strftime('%H:%M UTC')}\n"]
     has_strong = False
     
@@ -115,34 +131,27 @@ with st.spinner("Fetching 5-min candles from Binance (Futures + Spot)..."):
             
             price_str = f"${price:,.4f}" if name == "PENGU" else f"${price:,.0f}"
             
-            # Display price and signal
             st.metric(f"Current {name} Price", price_str)
             st.markdown(f"### {signal}")
-            
-            # Show confidence level for EVERY token
             st.progress(conf / 100)
-            st.caption(f"**Confidence Level**: {conf}% — {reason} | Source: {source}")
+            st.caption(f"**Confidence**: {conf}% — {reason} | Source: {source}")
             
-            # Only show strong success if >=80%
             if conf >= 80:
-                st.success("🔥 STRONG SIGNAL — Recommended to Buy!")
+                st.success("🔥 STRONG SIGNAL — Recommended to Buy on Myriad!")
                 alert_lines.append(f"• **{signal}** | Confidence: {conf}% | Price: {price_str}")
                 has_strong = True
         else:
-            st.error(f"❌ {name}: No candle data available")
+            st.error(f"❌ {name}: No data from any source")
         
         st.markdown("---")
 
-    # Send Telegram alert ONLY if there is at least one strong signal (>=80%)
     if has_strong:
         full_message = "\n".join(alert_lines)
         if send_telegram_alert(full_message):
-            st.success("✅ Strong signal(s) sent to your Telegram!")
-        else:
-            st.warning("Could not send Telegram alert")
+            st.success("✅ Strong signal alert sent to Telegram!")
     else:
-        st.info("No strong signals (≥80%) at the moment. Confidence levels shown above.")
+        st.info("No strong signals (≥80%) right now.")
 
-st.warning("⚠️ High-risk prediction markets. Only act on signals with ≥80% confidence. Trade responsibly.")
+st.warning("⚠️ Only trade when confidence ≥ 80%. High risk — use responsibly.")
 
-st.caption("Confidence shown for all tokens • Telegram alerts only when confidence ≥ 80%")
+st.caption("Now using 3 data sources for better reliability.")
