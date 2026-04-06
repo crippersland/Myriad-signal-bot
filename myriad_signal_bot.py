@@ -25,8 +25,8 @@ with st.sidebar:
         """, unsafe_allow_html=True)
 
 st.title("🚀 Myriad Markets 5-Min Candle Signal Bot")
-st.subheader("Confidence for All • Alerts Only ≥80%")
-st.caption("BTC • ETH • BNB • ZEC • PENGU | Fixed Data Sources")
+st.subheader("Confidence Shown for All • Alerts Only ≥80%")
+st.caption("BTC • ETH • BNB • ZEC • PENGU | Built for TheCryptomajor")
 
 def send_telegram_alert(message: str):
     try:
@@ -35,69 +35,42 @@ def send_telegram_alert(message: str):
         requests.post(url, data=data, timeout=10)
         return True
     except:
-        st.error("Telegram send failed")
+        st.error("Failed to send Telegram alert")
         return False
 
-# ====================== FIXED MULTI-SOURCE FETCH ======================
+# ====================== DUAL SOURCE DATA FETCH (Stable Version) ======================
 def get_klines(symbol):
-    sources_tried = []
-
-    # 1. Binance Futures (PENGUUSDT)
+    # Try Futures first
     try:
         url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval=5m&limit=30"
-        r = requests.get(url, timeout=15)
-        sources_tried.append("Futures")
+        r = requests.get(url, timeout=12)
         if r.ok:
             data = r.json()
             if len(data) >= 3:
                 df = pd.DataFrame(data, columns=['time','open','high','low','close','volume','close_time','quote_volume','trades','taker_base','taker_quote','ignore'])
                 df['close'] = pd.to_numeric(df['close'])
-                return df, "Binance Futures"
+                return df, "Futures"
     except:
         pass
 
-    # 2. Binance Spot (PENGUUSDT for PENGU)
+    # Fallback to Spot
     try:
         url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=5m&limit=30"
-        r = requests.get(url, timeout=15)
-        sources_tried.append("Spot")
+        r = requests.get(url, timeout=12)
         if r.ok:
             data = r.json()
             if len(data) >= 3:
                 df = pd.DataFrame(data, columns=['time','open','high','low','close','volume','close_time','quote_volume','trades','taker_base','taker_quote','ignore'])
                 df['close'] = pd.to_numeric(df['close'])
-                return df, "Binance Spot"
+                return df, "Spot"
     except:
         pass
 
-    # 3. CoinGecko fallback (best for PENGU)
-    try:
-        coin_map = {
-            "BTCUSDT": "bitcoin",
-            "ETHUSDT": "ethereum",
-            "BNBUSDT": "binancecoin",
-            "ZECUSDT": "zcash",
-            "PENGUUSDT": "pudgy-penguins"
-        }
-        coin_id = coin_map.get(symbol, "bitcoin")
-        url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart?vs_currency=usd&days=1&interval=5m"
-        r = requests.get(url, timeout=15)
-        sources_tried.append("CoinGecko")
-        if r.ok:
-            data = r.json()
-            prices = data.get("prices", [])
-            if len(prices) >= 3:
-                df = pd.DataFrame(prices, columns=['time', 'close'])
-                df['close'] = pd.to_numeric(df['close'])
-                return df, "CoinGecko"
-    except:
-        pass
-
-    return None, f"Failed ({', '.join(sources_tried)})"
+    return None, "No data"
 
 def generate_signal(df, asset_name):
-    if df is None or len(df) < 2:
-        return f"**WAITING** ({asset_name})", 0, "No data"
+    if df is None or len(df) < 3:
+        return f"**WAITING** ({asset_name})", 0, "Not enough candles"
     
     current_price = float(df['close'].iloc[-1])
     lookback = min(5, len(df)-1)
@@ -124,17 +97,17 @@ coins = {
     "ETH": "ETHUSDT",
     "BNB": "BNBUSDT",
     "ZEC": "ZECUSDT",
-    "PENGU": "PENGUUSDT"   # Fixed symbol
+    "PENGU": "PENGUUSDT"
 }
 
-# ====================== DASHBOARD ======================
+# ====================== MAIN DASHBOARD ======================
 if st.button("🔴 CHECK SIGNALS & SEND TELEGRAM (Only ≥80%)", type="primary", use_container_width=True):
     st.rerun()
 
 st.subheader("Current Signals")
 st.caption(f"Last checked: {datetime.now().strftime('%H:%M:%S UTC')}")
 
-with st.spinner("Trying Binance Futures → Spot → CoinGecko..."):
+with st.spinner("Fetching 5-min candle data..."):
     alert_lines = [f"🔔 **Myriad 5-Min Strong Signals** @ {datetime.now().strftime('%H:%M UTC')}\n"]
     has_strong = False
     
@@ -142,7 +115,7 @@ with st.spinner("Trying Binance Futures → Spot → CoinGecko..."):
         st.subheader(f"{name}")
         df, source = get_klines(symbol)
         
-        if df is not None and len(df) >= 2:
+        if df is not None and len(df) >= 3:
             price = float(df['close'].iloc[-1])
             signal, conf, reason = generate_signal(df, name)
             
@@ -154,11 +127,11 @@ with st.spinner("Trying Binance Futures → Spot → CoinGecko..."):
             st.caption(f"**Confidence**: {conf}% — {reason} | Source: {source}")
             
             if conf >= 80:
-                st.success("🔥 STRONG SIGNAL — Recommended to Buy!")
+                st.success("🔥 STRONG SIGNAL — Recommended to Buy on Myriad!")
                 alert_lines.append(f"• **{signal}** | Confidence: {conf}% | Price: {price_str}")
                 has_strong = True
         else:
-            st.error(f"❌ {name}: No data from any source")
+            st.warning(f"⏳ {name}: Waiting for candle data (Source: {source})")
         
         st.markdown("---")
 
@@ -167,8 +140,8 @@ with st.spinner("Trying Binance Futures → Spot → CoinGecko..."):
         if send_telegram_alert(full_message):
             st.success("✅ Strong signal alert sent to Telegram!")
     else:
-        st.info("No strong signals (≥80%) right now.")
+        st.info("No strong signals (≥80% confidence) at the moment.")
 
-st.warning("⚠️ Only act when confidence ≥ 80%. High risk — trade responsibly.")
+st.warning("⚠️ High-risk. Only take positions when confidence ≥ 80%. Trade responsibly.")
 
-st.caption("PENGU symbol fixed + better fallbacks. Click the button multiple times if needed.")
+st.caption("Reverted to previous stable version. Click the button to refresh.")
